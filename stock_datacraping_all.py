@@ -5,7 +5,7 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
 #1.Configuration
-API_KEY = "#Replace with your real api key from Alpha-Vintage"
+API_KEY = "GQNEOFEJUWR9NPNU"
 TICKERS = ['AAPL', 'MSFT', 'META', 'AMZN', 'TSLA', 'JPM', 'XOM']
 DAYS_BACK = 130
 SHEET_NAME = "Stock_Data_Master"

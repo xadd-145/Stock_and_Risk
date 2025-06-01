@@ -8,8 +8,9 @@ from oauth2client.service_account import ServiceAccountCredentials
 # CONFIGURATION
 # -----------------------------
 
-API_KEY = "GQNEOFEJUWR9NPNU"                                          #replace with your real api key from Alpha-Vintage
-TICKERS = ['AAPL', 'MSFT', 'META', 'AMZN', 'TSLA', 'JPM', 'XOM']        #apple, microsoft, meta, amazon, tesla, jpmorgan, exxonMobil
+API_KEY = "GQNEOFEJUWR9NPNU"                                            #replace with your real api key from Alpha-Vintage
+#TICKERS = ['AAPL', 'MSFT', 'META', 'AMZN', 'TSLA', 'JPM', 'XOM']        #apple, microsoft, meta, amazon, tesla, jpmorgan, exxonMobil
+TICKERS = ['AAPL']  
 DAYS_BACK = 130                                                         #approx. 6 months
 
 # -----------------------------
