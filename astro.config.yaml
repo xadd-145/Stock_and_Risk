@@ -1,0 +1,3 @@
+name: stocks_new_daily_update
+version: 1
+description: DAGs to fetch and upload stock data daily
