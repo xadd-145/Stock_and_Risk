@@ -1,95 +1,130 @@
+from airflow.decorators import dag, task
+from datetime import datetime, timedelta
 import pandas as pd
 import requests
-from datetime import datetime, timedelta
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
 # -----------------------------
-# CONFIGURATION
+# 1. CONFIGURATION
 # -----------------------------
 
-API_KEY = "GQNEOFEJUWR9NPNU"                                          #replace with your real api key from Alpha-Vintage
-TICKERS = ['AAPL', 'MSFT', 'META', 'AMZN', 'TSLA', 'JPM', 'XOM']        #apple, microsoft, meta, amazon, tesla, jpmorgan, exxonMobil
-DAYS_BACK = 130                                                         #approx. 6 months
+API_KEY = "GQNEOFEJUWR9NPNU"  # Your Alpha Vantage API key
+TICKERS = ['AAPL', 'MSFT', 'META', 'AMZN', 'TSLA', 'JPM', 'XOM']  # Stock tickers
+DAYS_BACK = 130  # approx. 6 months
 
 # -----------------------------
-# Google Sheets Authentication
+# 2. GOOGLE SHEETS AUTH FUNCTION
 # -----------------------------
 
-scope = [
-    "https://spreadsheets.google.com/feeds",
-    "https://www.googleapis.com/auth/drive"
-]
-creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
-client = gspread.authorize(creds)
+def authorize_gsheets():
+    """
+    Authorize access to Google Sheets using credentials.json
+    """
+    scope = [
+        "https://spreadsheets.google.com/feeds",
+        "https://www.googleapis.com/auth/drive"
+    ]
+    creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
+    return gspread.authorize(creds)
 
 # -----------------------------
-# Fetch the Stock Data
+# 3. DAG CONFIGURATION
 # -----------------------------
 
-def fetch_stock_data(symbol):                                           #calls the api using the symbol
-    print(f"Fetching data for: {symbol}")
-    url = "https://www.alphavantage.co/query"
-    params = {
-        "function": "TIME_SERIES_DAILY",
-        "symbol": symbol,
-        "outputsize": "compact",
-        "apikey": API_KEY
-    }
+default_args = {
+    "owner": "airflow",
+    "retries": 1,
+    "retry_delay": timedelta(minutes=5),
+}
 
-    response = requests.get(url, params=params)
-    data = response.json()                                              #converts json response into dataframe
+@dag(
+    schedule="@once",  # Runs only once when triggered manually
+    start_date=datetime(2025, 1, 1),  # Start date for DAG
+    catchup=False,
+    default_args=default_args,
+    tags=["stocks", "trial"]
+)
+def stock_data_trial_dag():
 
-    if "Time Series (Daily)" not in data:
-        print(f"Error fetching data for {symbol}. Response:\n{data}")
-        return None
+    # -----------------------------
+    # 4. FETCH STOCK DATA
+    # -----------------------------
 
-    timeseries = data["Time Series (Daily)"]
-    df = pd.DataFrame(timeseries).T                                     #sorts the data by date     
-    df.index = pd.to_datetime(df.index)
-    df = df.sort_index(ascending=True)
+    @task()
+    def fetch_stock_data(symbol):
+        """
+        Calls the Alpha Vantage API and returns stock data for a symbol
+        """
+        print(f"📥 Fetching data for: {symbol}")
+        url = "https://www.alphavantage.co/query"
+        params = {
+            "function": "TIME_SERIES_DAILY",
+            "symbol": symbol,
+            "outputsize": "compact",
+            "apikey": API_KEY
+        }
 
-    df = df.rename(columns={
-        "1. open": "Open",
-        "2. high": "High",
-        "3. low": "Low",
-        "4. close": "Close",
-        "5. volume": "Volume"
-    })
+        response = requests.get(url, params=params)
+        data = response.json()
 
-    df = df[["Open", "High", "Low", "Close", "Volume"]]                 #selects just the required fields & adds a symbol column to identify the stock
-    df["Symbol"] = symbol
-    df.reset_index(inplace=True)
-    df = df.rename(columns={"index": "Date"})
+        if "Time Series (Daily)" not in data:
+            print(f"❌ Error fetching data for {symbol}. Response:\n{data}")
+            return None
 
-    # Filter by date range (last 130 calendar days)                     #ensures consistent window size for metrics
-    cutoff = datetime.today() - timedelta(days=DAYS_BACK)
-    df = df[df["Date"] >= cutoff]
+        timeseries = data["Time Series (Daily)"]
+        df = pd.DataFrame(timeseries).T
+        df.index = pd.to_datetime(df.index)
+        df = df.sort_index(ascending=True)
 
-    return df
+        df = df.rename(columns={
+            "1. open": "Open",
+            "2. high": "High",
+            "3. low": "Low",
+            "4. close": "Close",
+            "5. volume": "Volume"
+        })
+
+        df = df[["Open", "High", "Low", "Close", "Volume"]]
+        df["Symbol"] = symbol
+        df.reset_index(inplace=True)
+        df = df.rename(columns={"index": "Date"})
+
+        # Filter by date range (last 130 days)
+        cutoff = datetime.today() - timedelta(days=DAYS_BACK)
+        df = df[df["Date"] >= cutoff]
+
+        return df
+
+    # -----------------------------
+    # 5. UPDATE GOOGLE SHEET
+    # -----------------------------
+
+    @task()
+    def update_google_sheet(ticker, df):
+        """
+        Updates the Google Sheet with the fetched stock data
+        """
+        try:
+            df["Date"] = df["Date"].astype(str)
+            client = authorize_gsheets()
+            sheet = client.open(ticker).sheet1
+            sheet.clear()
+            sheet.update([df.columns.values.tolist()] + df.values.tolist())
+            print(f"✅ Sheet updated for {ticker}")
+        except Exception as e:
+            print(f"❌ Failed to update {ticker}: {e}")
+
+    # -----------------------------
+    # 6. TASK FLOW FOR ALL TICKERS
+    # -----------------------------
+
+    for ticker in TICKERS:
+        data = fetch_stock_data.override(task_id=f"fetch_{ticker.lower()}")(ticker)
+        update_google_sheet.override(task_id=f"update_{ticker.lower()}")(ticker, data)
 
 # -----------------------------
-# Update the Google Sheet
+# 7. INSTANTIATE THE DAG
 # -----------------------------
 
-def update_google_sheet(ticker, df):                                    #opens the google sheets, clears any old data & uploads the new data with headers and rows
-    try:
-        df["Date"] = df["Date"].astype(str)                             #convert timestamp to string to prevent upload errors
-        sheet = client.open(ticker).sheet1
-        sheet.clear()
-        sheet.update([df.columns.values.tolist()] + df.values.tolist())
-        print(f"✅ Sheet updated for {ticker}")
-    except Exception as e:
-        print(f"❌ Failed to update {ticker}: {e}")
-
-# -----------------------------
-# MAIN
-# -----------------------------
-
-for ticker in TICKERS:
-    df = fetch_stock_data(ticker)
-    if df is not None:
-        update_google_sheet(ticker, df)
-
-
-#Result: For each of your 7 tickers, we get a fresh google sheet filled with 6 months of price data
+stock_data_trial_dag = stock_data_trial_dag()
